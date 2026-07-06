@@ -17,4 +17,4 @@ Both endpoints require a live Matrix OpenID token on every request, verified aga
 
 ## Deployment
 
-Deployed via [chris-syntax/gitops](https://github.com/chris-syntax/gitops)'s `matrix` branch, which pulls the image this repo's CI publishes to `ghcr.io/chris-syntax/gif-bridge`.
+Deployed via [chris-syntax/gitops](https://github.com/chris-syntax/gitops)'s `matrix` branch, which builds this repo directly from git at deploy time (same pattern as the `invites` branch) — no registry image, no CI.
