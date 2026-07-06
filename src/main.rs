@@ -10,6 +10,7 @@ use moka::future::Cache;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::{env, sync::Arc, time::Duration};
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
 struct AppState {
@@ -251,9 +252,15 @@ async fn main() {
             .build(),
     };
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     let app = Router::new()
         .route("/search", get(search_handler))
         .route("/media/:id", get(media_handler))
+        .layer(cors)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))

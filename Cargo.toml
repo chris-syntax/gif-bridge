@@ -13,3 +13,4 @@ moka = { version = "0.12", features = ["future"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = "1"
+tower-http = { version = "0.5", features = ["cors"] }
