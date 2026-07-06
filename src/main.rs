@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -17,9 +17,9 @@ struct AppState {
     giphy_api_key: Arc<String>,
     openid_verify_base: Arc<String>,
     media_cache: Cache<String, CachedMedia>,
-    // Every request re-verifies its OpenID token against the homeserver; this only
-    // dedupes bursts (e.g. a room render pulling in many gifs at once) within a
-    // short window, it is not a substitute for per-request verification.
+    // A given client mints one OpenID token and reuses it for a while (see cinny's
+    // getCachedOpenIdToken), so this cache is what actually saves the repeat
+    // homeserver round-trip rather than just deduping a burst.
     verified_token_cache: Cache<String, ()>,
 }
 
@@ -33,12 +33,6 @@ struct CachedMedia {
 struct SearchParams {
     q: String,
     limit: Option<u32>,
-    openid_token: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct MediaParams {
-    openid_token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -107,11 +101,20 @@ async fn verify_openid_token(state: &AppState, token: &str) -> bool {
     }
 }
 
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
 async fn search_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<Vec<GifSearchResult>>, StatusCode> {
-    let token = params.openid_token.as_deref().ok_or(StatusCode::UNAUTHORIZED)?;
+    let token = bearer_token(&headers).ok_or(StatusCode::UNAUTHORIZED)?;
     if !verify_openid_token(&state, token).await {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -167,16 +170,13 @@ async fn search_handler(
     Ok(Json(results))
 }
 
+// Unauthenticated by design: a gif id is only ever learned by going through an
+// authenticated /search first, so there's nothing to gate here — the resource
+// actually worth protecting (the Giphy API) is only reachable via /search.
 async fn media_handler(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(params): Query<MediaParams>,
 ) -> Result<Response, StatusCode> {
-    let token = params.openid_token.as_deref().ok_or(StatusCode::UNAUTHORIZED)?;
-    if !verify_openid_token(&state, token).await {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
     if let Some(cached) = state.media_cache.get(&id).await {
         return Ok(media_response(cached));
     }
