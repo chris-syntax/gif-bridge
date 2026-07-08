@@ -14,6 +14,7 @@ use tower_http::cors::{Any, CorsLayer};
 use auth::OpenIdVerifier;
 use disk_cache::{DiskCache, UrlStore};
 use giphy::GiphyClient;
+use media::InFlight;
 use search::GifSearchResult;
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ pub struct AppState {
     pub verifier: Arc<OpenIdVerifier>,
     pub disk_cache: Arc<DiskCache>,
     pub url_store: Arc<UrlStore>,
+    pub inflight: Arc<InFlight>,
     pub search_cache: Cache<(String, u32), Arc<Vec<GifSearchResult>>>,
 }
 
@@ -61,6 +63,7 @@ async fn main() {
         )),
         disk_cache: Arc::new(disk_cache),
         url_store: Arc::new(url_store),
+        inflight: Arc::new(InFlight::default()),
         search_cache: Cache::builder()
             .time_to_live(Duration::from_secs(60 * 60))
             .max_capacity(1_000)
