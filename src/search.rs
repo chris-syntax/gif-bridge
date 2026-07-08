@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
@@ -39,18 +41,30 @@ pub async fn search_handler(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    if params.q.trim().is_empty() {
+    let (q, limit) = cache_key(&params.q, params.limit);
+    if q.is_empty() {
         return Ok(Json(vec![]));
     }
 
-    let limit = params.limit.unwrap_or(24).min(50);
-    let gifs = state
-        .giphy
-        .search(&params.q, limit)
+    let results = state
+        .search_cache
+        .try_get_with((q.clone(), limit), async {
+            state
+                .giphy
+                .search(&q, limit)
+                .await
+                .map(|gifs| Arc::new(to_results(gifs)))
+        })
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
 
-    Ok(Json(to_results(gifs)))
+    Ok(Json(results.as_ref().clone()))
+}
+
+/// Normalized cache key: Giphy search is case-insensitive, so "Cat" and
+/// "cat " share an entry instead of costing two API calls.
+fn cache_key(q: &str, limit: Option<u32>) -> (String, u32) {
+    (q.trim().to_lowercase(), limit.unwrap_or(24).min(50))
 }
 
 fn to_results(gifs: Vec<GiphyGif>) -> Vec<GifSearchResult> {
@@ -116,5 +130,21 @@ mod tests {
         assert_eq!(result.width, None);
         assert_eq!(result.height, None);
         assert_eq!(result.size, None);
+    }
+
+    #[test]
+    fn cache_key_normalizes_query() {
+        assert_eq!(cache_key("  Cat GIF ", None), ("cat gif".to_string(), 24));
+    }
+
+    #[test]
+    fn cache_key_clamps_limit() {
+        assert_eq!(cache_key("cat", Some(500)).1, 50);
+        assert_eq!(cache_key("cat", Some(10)).1, 10);
+    }
+
+    #[test]
+    fn cache_key_blank_query_is_empty() {
+        assert_eq!(cache_key("   ", None).0, "");
     }
 }

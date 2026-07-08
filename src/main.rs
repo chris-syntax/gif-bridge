@@ -13,6 +13,7 @@ use tower_http::cors::{Any, CorsLayer};
 use auth::OpenIdVerifier;
 use giphy::GiphyClient;
 use media::CachedMedia;
+use search::GifSearchResult;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,6 +21,7 @@ pub struct AppState {
     pub giphy: Arc<GiphyClient>,
     pub verifier: Arc<OpenIdVerifier>,
     pub media_cache: Cache<String, CachedMedia>,
+    pub search_cache: Cache<(String, u32), Arc<Vec<GifSearchResult>>>,
 }
 
 #[tokio::main]
@@ -41,11 +43,15 @@ async fn main() {
         verifier: Arc::new(OpenIdVerifier::new(
             http.clone(),
             openid_verify_base,
-            Duration::from_secs(60),
+            Duration::from_secs(15 * 60),
         )),
         media_cache: Cache::builder()
             .time_to_live(Duration::from_secs(7 * 24 * 60 * 60))
             .max_capacity(2_000)
+            .build(),
+        search_cache: Cache::builder()
+            .time_to_live(Duration::from_secs(60 * 60))
+            .max_capacity(1_000)
             .build(),
         http,
     };
