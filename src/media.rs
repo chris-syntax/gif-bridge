@@ -4,14 +4,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
+use tokio::io::AsyncReadExt;
 
 use crate::AppState;
 
-#[derive(Clone)]
-pub struct CachedMedia {
-    pub bytes: Bytes,
-    pub content_type: String,
-}
+// Both rendition urls come out of Giphy's `images` block as .gif files, so
+// the content type is static rather than stored per entry.
+const GIF_CONTENT_TYPE: &str = "image/gif";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Variant {
@@ -37,7 +36,7 @@ impl Variant {
 }
 
 /// Giphy ids are alphanumeric (occasionally with `-`/`_`); anything else is
-/// rejected before the id can reach a cache key or, later, the filesystem.
+/// rejected before the id can reach a cache key or the filesystem.
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id
@@ -58,11 +57,15 @@ pub async fn media_handler(
     }
 
     let cache_key = format!("{id}.{}", variant.as_str());
-    if let Some(cached) = state.media_cache.get(&cache_key).await {
-        return Ok(media_response(cached));
+    if let Some((mut file, size)) = state.disk_cache.get(&cache_key).await {
+        let mut buf = Vec::with_capacity(size as usize);
+        file.read_to_end(&mut buf)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        return Ok(media_response(buf.into()));
     }
 
-    let urls = state.url_map.get(&id).await.ok_or(StatusCode::NOT_FOUND)?;
+    let urls = state.url_store.get(&id).await.ok_or(StatusCode::NOT_FOUND)?;
     let source_url = match variant {
         Variant::Thumb => urls.thumb,
         Variant::Full => urls.full,
@@ -77,22 +80,18 @@ pub async fn media_handler(
     if !media_resp.status().is_success() {
         return Err(StatusCode::BAD_GATEWAY);
     }
-    let content_type = media_resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/gif")
-        .to_string();
     let bytes = media_resp.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
 
-    let cached = CachedMedia { bytes, content_type };
-    state.media_cache.insert(cache_key, cached.clone()).await;
+    // A failed cache write shouldn't fail the request the bytes are for.
+    if let Err(e) = state.disk_cache.insert(&cache_key, &bytes).await {
+        tracing::warn!(cache_key, error = %e, "failed to cache media on disk");
+    }
 
-    Ok(media_response(cached))
+    Ok(media_response(bytes))
 }
 
-fn media_response(cached: CachedMedia) -> Response {
-    ([(header::CONTENT_TYPE, cached.content_type)], cached.bytes).into_response()
+fn media_response(bytes: Bytes) -> Response {
+    ([(header::CONTENT_TYPE, GIF_CONTENT_TYPE)], bytes).into_response()
 }
 
 #[cfg(test)]

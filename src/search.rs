@@ -55,9 +55,13 @@ pub async fn search_handler(
         .try_get_with((q.clone(), limit), async {
             let gifs = state.giphy.search(&q, limit).await?;
             // Record CDN urls now: search is the only place ids are born, and
-            // /media resolves against this map instead of the Giphy API.
+            // /media resolves against these records instead of the Giphy API.
+            // A failed write is only a log line — the gif itself can still be
+            // served for as long as the in-memory side of the store holds it.
             for gif in &gifs {
-                state.url_map.insert(gif.id.clone(), giphy::gif_urls(gif)).await;
+                if let Err(e) = state.url_store.put(&gif.id, &giphy::gif_urls(gif)).await {
+                    tracing::warn!(id = gif.id, error = %e, "failed to persist url record");
+                }
             }
             Ok::<_, GiphyError>(Arc::new(to_results(gifs)))
         })

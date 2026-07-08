@@ -1,5 +1,5 @@
 use reqwest::{Client, StatusCode, Url};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The only place outbound `api.giphy.com` calls are made; every call is
 /// logged at info level so quota consumption stays observable.
@@ -41,7 +41,7 @@ impl GiphyClient {
 /// CDN download URLs for the two renditions the bridge serves. Recorded when
 /// a gif first appears in search results — the only source of ids — so the
 /// media path never needs an api.giphy.com lookup to resolve them.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GifUrls {
     pub full: String,
     pub thumb: String,
