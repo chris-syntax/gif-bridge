@@ -36,35 +36,31 @@ impl GiphyClient {
         Ok(parsed.data)
     }
 
-    pub async fn get_by_id(&self, id: &str) -> Result<GiphyGif, GiphyError> {
-        let lookup_url = format!(
-            "https://api.giphy.com/v1/gifs/{}?api_key={}",
-            id, self.api_key
-        );
+}
 
-        tracing::info!(id, "giphy api call: get by id");
-        let resp = self
-            .http
-            .get(&lookup_url)
-            .send()
-            .await
-            .map_err(GiphyError::Request)?;
-        if !resp.status().is_success() {
-            return Err(GiphyError::Status(resp.status()));
-        }
-        let parsed: GiphyGetResponse = resp.json().await.map_err(GiphyError::Request)?;
-        Ok(parsed.data)
-    }
+/// CDN download URLs for the two renditions the bridge serves. Recorded when
+/// a gif first appears in search results — the only source of ids — so the
+/// media path never needs an api.giphy.com lookup to resolve them.
+#[derive(Clone)]
+pub struct GifUrls {
+    pub full: String,
+    pub thumb: String,
+}
+
+pub fn gif_urls(gif: &GiphyGif) -> GifUrls {
+    let full = gif.images.original.url.clone();
+    let thumb = gif
+        .images
+        .fixed_width
+        .as_ref()
+        .map(|img| img.url.clone())
+        .unwrap_or_else(|| full.clone());
+    GifUrls { full, thumb }
 }
 
 #[derive(Deserialize)]
 struct GiphySearchResponse {
     data: Vec<GiphyGif>,
-}
-
-#[derive(Deserialize)]
-struct GiphyGetResponse {
-    data: GiphyGif,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +74,7 @@ pub struct GiphyGif {
 #[derive(Deserialize)]
 pub struct GiphyImages {
     pub original: GiphyImage,
+    pub fixed_width: Option<GiphyImage>,
 }
 
 #[derive(Deserialize)]
@@ -105,6 +102,12 @@ mod tests {
                         "width": "480",
                         "height": "270",
                         "size": "1048576"
+                    },
+                    "fixed_width": {
+                        "url": "https://media.giphy.com/media/abc123/200w.gif",
+                        "width": "200",
+                        "height": "113",
+                        "size": "131072"
                     }
                 }
             }]
@@ -114,6 +117,10 @@ mod tests {
         assert_eq!(parsed.data.len(), 1);
         assert_eq!(parsed.data[0].id, "abc123");
         assert_eq!(parsed.data[0].images.original.width.as_deref(), Some("480"));
+
+        let urls = gif_urls(&parsed.data[0]);
+        assert_eq!(urls.full, "https://media.giphy.com/media/abc123/giphy.gif");
+        assert_eq!(urls.thumb, "https://media.giphy.com/media/abc123/200w.gif");
     }
 
     #[test]
@@ -123,5 +130,25 @@ mod tests {
         assert!(parsed.width.is_none());
         assert!(parsed.height.is_none());
         assert!(parsed.size.is_none());
+    }
+
+    #[test]
+    fn thumb_falls_back_to_original_when_fixed_width_missing() {
+        let gif = GiphyGif {
+            id: "abc123".to_string(),
+            title: String::new(),
+            url: String::new(),
+            images: GiphyImages {
+                original: GiphyImage {
+                    url: "https://media.giphy.com/media/abc123/giphy.gif".to_string(),
+                    width: None,
+                    height: None,
+                    size: None,
+                },
+                fixed_width: None,
+            },
+        };
+        let urls = gif_urls(&gif);
+        assert_eq!(urls.thumb, urls.full);
     }
 }

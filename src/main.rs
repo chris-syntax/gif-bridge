@@ -11,7 +11,7 @@ use reqwest::Client;
 use tower_http::cors::{Any, CorsLayer};
 
 use auth::OpenIdVerifier;
-use giphy::GiphyClient;
+use giphy::{GifUrls, GiphyClient};
 use media::CachedMedia;
 use search::GifSearchResult;
 
@@ -22,6 +22,7 @@ pub struct AppState {
     pub verifier: Arc<OpenIdVerifier>,
     pub media_cache: Cache<String, CachedMedia>,
     pub search_cache: Cache<(String, u32), Arc<Vec<GifSearchResult>>>,
+    pub url_map: Cache<String, GifUrls>,
 }
 
 #[tokio::main]
@@ -53,6 +54,10 @@ async fn main() {
             .time_to_live(Duration::from_secs(60 * 60))
             .max_capacity(1_000)
             .build(),
+        url_map: Cache::builder()
+            .time_to_live(Duration::from_secs(7 * 24 * 60 * 60))
+            .max_capacity(50_000)
+            .build(),
         http,
     };
 
@@ -63,7 +68,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/search", get(search::search_handler))
-        .route("/media/:id", get(media::media_handler))
+        .route("/media/:id/:variant", get(media::media_handler))
         .layer(cors)
         .with_state(state);
 

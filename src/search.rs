@@ -7,7 +7,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{auth, giphy::GiphyGif, AppState};
+use crate::{
+    auth,
+    giphy::{self, GiphyError, GiphyGif},
+    AppState,
+};
 
 #[derive(Deserialize)]
 pub struct SearchParams {
@@ -49,11 +53,13 @@ pub async fn search_handler(
     let results = state
         .search_cache
         .try_get_with((q.clone(), limit), async {
-            state
-                .giphy
-                .search(&q, limit)
-                .await
-                .map(|gifs| Arc::new(to_results(gifs)))
+            let gifs = state.giphy.search(&q, limit).await?;
+            // Record CDN urls now: search is the only place ids are born, and
+            // /media resolves against this map instead of the Giphy API.
+            for gif in &gifs {
+                state.url_map.insert(gif.id.clone(), giphy::gif_urls(gif)).await;
+            }
+            Ok::<_, GiphyError>(Arc::new(to_results(gifs)))
         })
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
@@ -75,19 +81,15 @@ fn to_result(gif: GiphyGif) -> GifSearchResult {
     let width = gif.images.original.width.as_deref().and_then(|w| w.parse().ok());
     let height = gif.images.original.height.as_deref().and_then(|h| h.parse().ok());
     let size = gif.images.original.size.as_deref().and_then(|s| s.parse().ok());
-    // A single cached rendition serves both the picker thumbnail and the
-    // sent message's full image — keeps the bridge to one cache entry per
-    // gif instead of juggling multiple Giphy renditions.
-    let media_url = format!("/api/gif/media/{}", gif.id);
     GifSearchResult {
+        thumb_url: format!("/api/gif/media/{}/thumb", gif.id),
+        full_url: format!("/api/gif/media/{}/full", gif.id),
         id: gif.id,
         width,
         height,
         mimetype: "image/gif".to_string(),
         size,
         title: gif.title,
-        thumb_url: media_url.clone(),
-        full_url: media_url,
         page_url: gif.url,
     }
 }
@@ -109,6 +111,7 @@ mod tests {
                     height: height.map(String::from),
                     size: size.map(String::from),
                 },
+                fixed_width: None,
             },
         }
     }
@@ -120,8 +123,8 @@ mod tests {
         assert_eq!(result.height, Some(270));
         assert_eq!(result.size, Some(1_048_576));
         assert_eq!(result.mimetype, "image/gif");
-        assert_eq!(result.thumb_url, "/api/gif/media/abc123");
-        assert_eq!(result.full_url, "/api/gif/media/abc123");
+        assert_eq!(result.thumb_url, "/api/gif/media/abc123/thumb");
+        assert_eq!(result.full_url, "/api/gif/media/abc123/full");
     }
 
     #[test]
