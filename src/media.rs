@@ -27,6 +27,10 @@ use crate::{disk_cache::DiskCache, AppState};
 // the content type is static rather than stored per entry.
 const GIF_CONTENT_TYPE: &str = "image/gif";
 
+// A gif id's content never changes, so the browser may cache forever and
+// skip revalidation — repeat picker opens and message renders cost nothing.
+const CACHE_FOREVER: &str = "public, max-age=31536000, immutable";
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Variant {
     Thumb,
@@ -270,7 +274,9 @@ async fn download_and_tee(
 }
 
 fn media_response(body: Body, content_length: Option<u64>) -> Response {
-    let mut builder = Response::builder().header(header::CONTENT_TYPE, GIF_CONTENT_TYPE);
+    let mut builder = Response::builder()
+        .header(header::CONTENT_TYPE, GIF_CONTENT_TYPE)
+        .header(header::CACHE_CONTROL, CACHE_FOREVER);
     if let Some(len) = content_length {
         builder = builder.header(header::CONTENT_LENGTH, len);
     }
@@ -280,6 +286,20 @@ fn media_response(body: Body, content_length: Option<u64>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn media_responses_are_immutably_cacheable() {
+        let resp = media_response(Body::empty(), Some(1234));
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), "image/gif");
+        assert_eq!(resp.headers().get(header::CONTENT_LENGTH).unwrap(), "1234");
+
+        let no_len = media_response(Body::empty(), None);
+        assert!(no_len.headers().get(header::CONTENT_LENGTH).is_none());
+    }
 
     #[test]
     fn parses_variants() {
